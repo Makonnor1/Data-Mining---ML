@@ -1,0 +1,226 @@
+---
+title: "IST 707 Project"
+author: "Alex Klein & Marley Akonnor"
+date: "11/18/2021"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+#INSTALL PACKAGES USED
+```{r}
+library("gdata")
+library("boot")
+library("plyr")
+library("readxl")
+library("randomForest")
+library("ggplot2")
+library("pROC")
+library("reshape2")
+library("dplyr")
+library("forecast")
+library("neuralnet")
+library("caret")
+library("Metrics")
+```
+
+#IMPORT DATASET AND SAVE AS DATAFRAME
+```{r}
+DataSetDataFrame1 <- read_excel("C:/Users/klein/Desktop/SU Classes/Quarter 2/IST 707/Project/cwurData.xlsx")
+DF1 <- data.frame(DataSetDataFrame1)
+```
+
+#CLEAN AND OBSERVE DATA
+```{r}
+DF1 <- na.omit(DF1)
+str(DF1)
+```
+
+#REMOVE THE BELOW 4 COLUMNS FOR EDA
+```{r}
+DF1_EDA <- DF1[, !(names(DF1) %in% c("institution", "country", "broad_impact", "year"))]
+```
+
+#CREATE A CORRELATION MATRIX
+```{r}
+pairs(DF1_EDA[,3:10])
+```
+
+#CREATE RANDOMFOREST
+#CREATE X AND Y MEASURES FOR RANDOM FOREST
+```{r}
+XF <- DF1 %>%
+  select(quality_of_education, alumni_employment, quality_of_faculty, publications, influence, citations, broad_impact, patents)
+YT <- DF1$score
+```
+
+#CREATE TRAINING AND TESTING DATASETS
+```{r}
+INDEXRF <- createDataPartition(YT, p=0.6, list=FALSE)
+XF_TRAINING <- XF[INDEXRF,]
+XF_TESTING <- XF[-INDEXRF,]
+YT_TRAINING <- YT[INDEXRF]
+YT_TESTING <- YT[-INDEXRF]
+```
+
+#TRAINING THE RANDOMFOREST
+```{r}
+RFOUTPUT <- randomForest(x=XF_TRAINING, y=YT_TRAINING, maxnodes=10,ntree=10)
+```
+
+#CREATING PREDICTIONSRF
+```{r}
+PREDICTIONSRF <- predict(RFOUTPUT, XF_TESTING)
+
+RESULTSRF <- XF_TESTING
+RESULTSRF['score'] <- YT_TESTING
+RESULTSRF['prediction']<-  PREDICTIONSRF
+
+head(RESULTSRF)
+```
+
+
+#CREATING SCATTERPLOT GRAPH
+```{r}
+ggplot(  ) + 
+  geom_point( aes(x = XF_TESTING$patents, y = YT_TESTING, color = 'red', alpha = 0.5) ) + 
+  geom_point( aes(x = XF_TESTING$patents , y = PREDICTIONSRF, color = 'blue',  alpha = 0.5)) + 
+  labs(x = "patents", y = "Score", color = "", alpha = 'Transperency') +
+  scale_color_manual(labels = c( "Predicted", "Real"), values = c("blue", "red")) 
+```
+
+
+#FINDING MEAN SQUARED ERROR, and R-SQUARED VALUES
+
+```{r}
+print(paste0('RMSE: ' ,caret::postResample(PREDICTIONSRF , YT_TESTING)['RMSE']^2 ))
+```
+
+```{r}
+print(paste0('R2: ' ,caret::postResample(PREDICTIONSRF , YT_TESTING)['Rsquared'] ))
+```
+
+# Normalized RMSE
+```{r}
+# NRMSE = RMSE / ( max value – min value )
+NRMSE = 2.39147488085974 / (100.00 - 44.02)
+NRMSE
+```
+
+#Create DF2 w No Non-Numeric fields.
+```{r}
+DF2 <- DF1[,c(-1:-4,-14)]
+```
+
+#CREATING SAMPLES, TRAINING, AND TESTING DATASETS FOR NEURAL NETWORK
+```{r}
+samplesize = 0.60 * nrow(DF2)
+set.seed(76)
+INDEXNN = sample( seq_len ( nrow ( DF2 ) ), size = samplesize )
+
+TRAINDFNN = DF2[ INDEXNN, ]
+TESTDFNN = DF2[ -INDEXNN, ]
+```
+
+#SCALING/NORMALIZING DATA FOR NEURAL NETWORK
+```{r}
+MAXIMUM = apply(DF2 , 2 , max)
+MINIMUM = apply(DF2, 2 , min)
+scaled = as.data.frame(scale(DF2, center = MINIMUM, scale = MAXIMUM - MINIMUM))
+```
+
+#CREATING DATASETS FOR TESTING AND TRAINING NEURAL NETWORK
+```{r}
+NNTRAINING = scaled[INDEXNN , ]
+NNTESTING = scaled[-INDEXNN , ]
+
+set.seed(7)
+NN = neuralnet(score~quality_of_education + alumni_employment+ quality_of_faculty+ publications+ influence+ citations+ broad_impact+ patents, NNTRAINING, hidden = c(6,4,2), linear.output = FALSE )
+
+plot(NN)
+```
+
+#CREATING PREDICTIONS FROM NEURAL NETWORK
+```{r}
+PRESULTS <- subset(NNTESTING, select = c("quality_of_education", "alumni_employment", "quality_of_faculty", "publications", "influence", "citations", "broad_impact", "patents"))
+head(PRESULTS)
+NNPRESULTS <- compute(NN, PRESULTS)
+NNRESULTS <- data.frame(actual = NNTESTING$score, prediction = NNPRESULTS$net.result)
+head(NNRESULTS)
+```
+
+#GRAPHING PREDICTIONS VS REAL SCORES
+```{r}
+PREDICTNNTESTING = compute(NN, NNTESTING[,c(1:8)])
+PREDICTNNTESTING = (PREDICTNNTESTING$net.result * (max(DF2$score) - min(DF2$score))) + min(DF2$score)
+
+plot(TESTDFNN$score, PREDICTNNTESTING, col='blue', pch=10, ylim = range(0:100), xlim = range(0:100), ylab = "Predicted Score", xlab = "Real Score")
+
+
+abline(0,1)
+```
+
+#FINDING RMSE
+```{r}
+NN_RMSE = (sum((TESTDFNN$score - PREDICTNNTESTING)^2) / nrow(TESTDFNN)) ^ 0.5
+NN_RMSE
+```
+
+```{r}
+# Normalized RMSE 
+#NRMSENN = RMSE / (max value - min value)
+NRMSENN = 0.766921 / (100.00 - 44.02)
+NRMSENN
+```
+
+#VALIDATING NEURAL NETWORK VIA NESTING LOOP
+```{r}
+set.seed(47)
+k = 100
+NN_RMSE = NULL
+
+List = list( )
+
+for(j in 10:65){
+    for (i in 1:k) {
+        INDEXNN = sample(1:nrow(DF2),j )
+
+        NNTRAINING = scaled[INDEXNN,]
+        NNTESTING = scaled[-INDEXNN,]
+        TESTDFNN = DF2[-INDEXNN,]
+
+        NN = neuralnet(score~quality_of_education + alumni_employment+ quality_of_faculty+ publications+ influence+ citations+ broad_impact+ patents, NNTRAINING, hidden = 3, linear.output= T)
+        PREDICTNNTESTING = compute(NN,NNTESTING[,c(1:8)])
+        PREDICTNNTESTING = (PREDICTNNTESTING$net.result*(max(DF2$score)-min(DF2$score)))+min(DF2$score)
+
+        NN_RMSE [i]<- (sum((TESTDFNN$score - PREDICTNNTESTING)^2)/nrow(TESTDFNN))^0.5
+    }
+    List[[j]] = NN_RMSE
+}
+
+Matrix.RMSE = do.call(cbind, List)
+```
+
+#GRAPHING RMSE VIA BOXPLOT
+```{r}
+boxplot(Matrix.RMSE[,3], ylab = "RMSE", main = "RMSE BoxPlot (length of training set = 65)")
+```
+
+#MEASURING AND PLOTTING VARIATION OF RMSE
+```{r}
+library(matrixStats)
+
+RMSETIME = colMedians(Matrix.RMSE)
+
+X = seq(10,65)
+
+plot (RMSETIME~X, type = "l", xlab = "Training Set Length", ylab = "median RMSE", main = "RMSE Variation w Training Set Length")
+```
+
+#LINEAR MODELING FOR ALL VARIABLES
+```{r}
+LMALLVAR <- lm(score~quality_of_education + alumni_employment+ quality_of_faculty+ publications+ influence+ citations+ broad_impact+ patents, data=DF1)
+summary(LMALLVAR)
+```
+
+
